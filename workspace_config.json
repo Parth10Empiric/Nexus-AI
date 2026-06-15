@@ -1,0 +1,6 @@
+{
+  "_comment": "Phase 3.1 workspace map. Keys are keywords matched (case-insensitively) inside the window title; values are the absolute project roots scanned for the active file. Add one entry per project you work in.",
+  "workspaces": {
+    "Nexus AI": "/home/empiric/Projects/Nexus AI"
+  }
+}

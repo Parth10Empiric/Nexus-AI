@@ -1,0 +1,65 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---------------------------------------------------------------------------
+   Global base — Enterprise Dark Mode.
+   We set crisp font rendering, lock the background to the deep structural
+   gray, and disable text selection on chrome so the app feels native.
+--------------------------------------------------------------------------- */
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  /* UI Phase 1 — the floating orb window must let the desktop show through.
+     main.jsx adds `.orb-window` to <html> when routed to `?window=orb`. */
+  .orb-window,
+  .orb-window body,
+  .orb-window #root {
+    background: transparent !important;
+    overflow: hidden;
+  }
+
+  body {
+    @apply bg-nexus-bg text-nexus-text font-sans antialiased;
+    /* Crisp typography on every display (the "Modify" step). */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    /* Stop the whole window from being a text-selection target. */
+    user-select: none;
+    overflow: hidden; /* the dashboard manages its own scroll regions */
+  }
+
+  /* Thin, unobtrusive scrollbars inside scroll regions. */
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-thumb {
+    @apply bg-nexus-elevated rounded-full;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@layer components {
+  /* Reusable card surface so every panel looks identical. */
+  .nexus-card {
+    @apply bg-nexus-surface border border-nexus-border rounded-xl shadow-card;
+  }
+
+  /* One-line truncation that NEVER wraps or grows the box -> zero layout shift. */
+  .truncate-line {
+    @apply block overflow-hidden whitespace-nowrap text-ellipsis;
+    min-width: 0; /* critical inside flex children for ellipsis to engage */
+  }
+}

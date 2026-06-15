@@ -1,0 +1,29 @@
+Act as a Senior Technical Architect and Full-Stack Developer. >
+Please carefully read and analyze the attached @Nexus_AI.md  file. Based on the project specifications in that document, I want you to focus exclusively on building Phase 1.1.
+Please provide a comprehensive response broken down into the following four parts:
+1. Execution Plan: > Provide a clear, step-by-step development plan specifically for Phase 1.1.
+2. Project Architecture & Structure: > Outline the exact directory structure for both the frontend and backend required for Phase 1.1. Include where specific configuration files, components, and logic should live.
+3. Bootstrap Commands & Code:
+Provide the terminal commands needed to initialize the project for Phase 1.1, along with the foundational boilerplate code to get it running.
+4. Technical Documentation (Generate a .md file):
+Generate a detailed Markdown (.md) document tailored to Phase 1.1. This document must clearly explain:
+
+Every tool and library we are using (and why we are using it). The core functionalities being built in this phase.How the code works under the hood.Write this in plain, easy-to-understand language so I can use it as a learning guide to fully understand the codebase.
+
+## 🛠️ Phase 1: The Local Observer (Context & UI)
+
+### Step 1.1: Background Window Tracker Daemon
+
+* **Code:** Write a standalone Python script (`tracker.py`) using `pygetwindow` (Windows) or an active-window shell script hook wrapped in `psutil`/`subprocess` (Linux/Ubuntu). It must log the active window title and application name every 5 seconds to a local JSON file or a lightweight local SQLite database (`local_logs.db`).
+* **Test:** Run the script in your terminal, switch between your IDE, a browser tab, and your terminal. Open the SQLite database or JSON file to check if the entries match your exact timeline.
+* **Modify:** Filter out background noise. If the active window matches system tasks (e.g., "gnome-shell", "Desktop"), discard it. Ensure it only logs when the title string actually changes or after a fixed interval if the window remains active.
+* **Re-Test:** Confirm that the log file is perfectly clean and contains only meaningful developer window titles.
+* **Satisfy:** Lock down `tracker.py`. It should run silently with $<1\%$ CPU usage.
+
+## 🛠️ Phase 1: The Foundation (The Assistant Learns to Watch)
+**The Goal:** Before the AI can help, it needs to know what the user is working on. This phase builds the system's "eyes" and the main user dashboard.
+
+* **Step 1: The Silent Observer**
+  * **What we are building:** A lightweight, invisible program that runs in the background of the computer.
+  * **What it does:** It quietly takes notes on what application or document the user has open (like "Marketing Plan - Word" or "Website Code"). It uses almost no computer power and respects privacy by only logging the titles of active windows, not taking heavy screenshots.
+Show

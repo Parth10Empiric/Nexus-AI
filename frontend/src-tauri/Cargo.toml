@@ -1,0 +1,23 @@
+[package]
+name = "nexus-ai-dashboard"
+version = "0.1.0"
+description = "Nexus AI Local Observer desktop shell"
+authors = ["Nexus AI"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# `macos-private-api` pairs with `app.macOSPrivateApi` in tauri.conf.json so the
+# transparent floating orb (UI Phase 1) also works on macOS. No-op on Linux.
+tauri = { version = "2", features = ["macos-private-api"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Reads the Phase 1.1 SQLite timeline. `bundled` compiles SQLite in, so there
+# is no system dependency to install.
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+[features]
+# This feature is used for production builds (`tauri build`).
+custom-protocol = ["tauri/custom-protocol"]

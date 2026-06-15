@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "agent-orb",
+  "description": "UI Phase 1 — grants the dashboard and the floating agent orb the core permissions they need: OS-level window dragging for the orb, and the event bus so the two windows can sync their open/closed lifecycle. Custom Tauri commands (spawn_agent_orb / close_agent_orb / get_active_window) are NOT gated by the ACL and work without being listed here.",
+  "windows": ["main", "agent-orb"],
+  "permissions": [
+    "core:event:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-set-always-on-top",
+    "core:window:allow-set-position",
+    "core:window:allow-set-focus",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-close"
+  ]
+}

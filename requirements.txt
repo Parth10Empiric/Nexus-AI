@@ -1,0 +1,37 @@
+# Phase 1.1 — Background Window Tracker Daemon
+psutil>=5.9        # resolve PID -> process (application) name, cross-platform
+
+# Phase 3.2 — File-Change Event Hook
+watchdog>=4.0      # OS-level filesystem save events (inotify on Linux)
+
+# Phase 2.3 / 5.1 — Local Vector Memory (RAG)
+chromadb>=1.5                  # local embeddings store for semantic recall
+langchain-text-splitters>=0.2  # code-aware chunking (RecursiveCharacterTextSplitter)
+# Embeddings via local Ollama model: ollama pull nomic-embed-text
+
+# Phase 4.1 — Local Microphone Stream Capturer
+sounddevice>=0.4   # PortAudio input stream (record from mic)
+numpy>=1.24        # audio frame buffers
+pynput>=1.7        # global push-to-talk hotkey listener
+
+# Phase 4.2 — Local Speech-to-Text
+faster-whisper>=1.0  # CPU-optimized Whisper (CTranslate2); int8 base.en
+
+# Phase 4.3 — Local Text-to-Speech
+piper-tts>=1.2     # local ONNX neural TTS (en_US-lessac-medium.onnx)
+# Voice model: place en_US-lessac-medium.onnx (+ .json) in the project root.
+#   Download from https://huggingface.co/rhasspy/piper-voices
+
+# Phase 4.5 — Wake-Word Engine + UI Bridge
+openwakeword>=0.6  # passive low-CPU wake-word detection (ONNX)
+websockets>=12     # local WebSocket bridge to the React UI
+# One-time: python -c "import openwakeword.utils as u; u.download_models()"
+
+# Windows only (ignored on Linux):
+pygetwindow>=0.0.9 ; sys_platform == "win32"
+
+# System packages required on Linux/X11 (install via apt, NOT pip):
+#   sudo apt install xdotool
+# Phase 4.1 audio system packages:
+#   sudo apt install portaudio19-dev ffmpeg
+

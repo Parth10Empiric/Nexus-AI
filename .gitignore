@@ -207,3 +207,6 @@ Cargo.lock
 # End of https://www.toptal.com/developers/gitignore/api/python,rust,react
 
 MyWork.txt
+prompt.txt
+data/
+nexus_memory_db

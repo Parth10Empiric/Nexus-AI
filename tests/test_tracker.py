@@ -430,7 +430,8 @@ class TestContextEngine(unittest.TestCase):
             self.assertTrue(any("a.py" in l for l in ctx.recent_logs))
             p = ce.build_master_prompt("what now?", ctx)
             self.assertIn("Nexus Ten", p)
-            self.assertIn("[LIVE SCREEN]", p)
+            self.assertIn("[LIVE SCREEN CONTEXT]", p)
+            self.assertIn("Currently Focused Window:", p)  # Phase 5.3 dual context
             self.assertIn("[RECENT HISTORY]", p)
             self.assertIn("[USER SPOKE]: what now?", p)
             self.assertIn("x = 1", p)
@@ -532,7 +533,7 @@ class TestSessionPrompt(unittest.TestCase):
                           ["api.py (code, 09:00)"])
         p = build_session_prompt("what does it return", ctx,
                                  "User: explain\nNexus: a ping endpoint")
-        for block in ("[LIVE SCREEN]", "[RECENT HISTORY]", "[CONVERSATION THREAD]",
+        for block in ("[LIVE SCREEN CONTEXT]", "[RECENT HISTORY]", "[CONVERSATION THREAD]",
                       "[USER SPOKE]: what does it return"):
             self.assertIn(block, p)
         self.assertIn("def ping", p)
@@ -549,13 +550,13 @@ class TestSituationalPrompt(unittest.TestCase):
         low = p.lower()
         self.assertIn("casual", low)
         self.assertIn("ignore all context", low)        # casual → no context
-        self.assertIn("active screen context", low)      # authoritative open file
+        self.assertIn("live screen context", low)        # focused-window vs background file
 
     def test_context_block_has_screen_and_question(self):
         from tracker.context_engine import build_session_context_block, OmniContext
         ctx = OmniContext("a.py", "a.py - X", "code here\n", ["a.py (code, 09:00)"])
         block = build_session_context_block("explain this", ctx, "")
-        self.assertIn("[LIVE SCREEN]", block)
+        self.assertIn("[LIVE SCREEN CONTEXT]", block)
         self.assertIn("code here", block)
         self.assertIn("[USER SPOKE]: explain this", block)
 

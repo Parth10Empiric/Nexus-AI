@@ -132,6 +132,28 @@ SELF_EXCLUDE_MARKERS = {
     "nexus-ai",
 }
 
+# ---------------------------------------------------------------------------
+# Phase 5.3 — Focus classification (the "Stale Context Bug" fix).
+# The orchestrator fetches the LATEST OS window from `activity_log` and decides
+# whether the user is actually looking at their editor (so the background code
+# file IS the screen) or at a browser/terminal (so the code is just background).
+# Matching is case-insensitive substring against "<app_name> <title>".
+# ---------------------------------------------------------------------------
+EDITOR_APP_MARKERS = {
+    "visual studio code", "vscode", "vs code", "code - oss", "code",
+    "cursor", "windsurf", "sublime text", "sublime", "intellij", "pycharm",
+    "webstorm", "neovim", "nvim", "vim", "nano", "emacs", "gedit", "kate",
+    "atom", "zed", "jetbrains",
+}
+BROWSER_APP_MARKERS = {
+    "google chrome", "chromium", "chrome", "firefox", "mozilla", "brave",
+    "microsoft edge", "edge", "opera", "vivaldi", "safari", "librewolf",
+}
+TERMINAL_APP_MARKERS = {
+    "gnome-terminal", "terminal", "konsole", "xterm", "alacritty", "kitty",
+    "tmux", "terminator", "tilix", "wezterm", "ptyxis", "bash", "zsh",
+}
+
 # Master switch for the self-exclusion guard. Set False when you ARE developing
 # Nexus AI itself and want to ask the assistant about its OWN files (e.g.
 # "what classes are in test_tracker.py?"). True = never inject Nexus AI's own

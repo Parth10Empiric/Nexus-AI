@@ -35,6 +35,19 @@ class OmniContext:
     active_window_title: Optional[str]
     file_content: Optional[str]
     recent_logs: List[str] = field(default_factory=list)
+    # Phase 5.3 — the ABSOLUTE-latest OS window from `activity_log`. This is the
+    # ground truth for "what is focused RIGHT NOW", independent of which file
+    # the watchdog last snapshotted. Fixes the Stale Context Bug.
+    current_os_app: Optional[str] = None
+    current_os_title: Optional[str] = None
+    # "editor" | "browser" | "terminal" | "other" — classifies the focus above.
+    focus_kind: str = "other"
+
+    @property
+    def user_on_editor(self) -> bool:
+        """True when the user is actually looking at their code editor, so the
+        background file genuinely IS what's on screen."""
+        return self.focus_kind == "editor"
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +78,41 @@ def _fetch_active_file(conn: sqlite3.Connection) -> Optional[FileContext]:
         file_content=row["file_content"],
         window_title=row["window_title"] or "",
     )
+
+
+def _fetch_current_window(conn: sqlite3.Connection) -> Optional[tuple[str, str]]:
+    """Phase 5.3 — the ABSOLUTE latest OS focus from `activity_log`.
+
+    Unlike `active_file_context` (one stale row PER FILE, overwritten in place),
+    `activity_log` is the real focus timeline: switching to Chrome lands here
+    immediately. We order by `id DESC` (monotonic autoincrement) so we always
+    grab the newest millisecond even if two events share a timestamp string.
+    'heartbeat' rows are fine — they still record the currently focused window.
+    Returns (app_name, title) or None.
+    """
+    try:
+        row = conn.execute(
+            "SELECT app_name, title FROM activity_log "
+            "ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    except sqlite3.Error:
+        return None
+    if row is None:
+        return None
+    return (row["app_name"] or "", (row["title"] or "").strip())
+
+
+def _classify_focus(app_name: str, title: str) -> str:
+    """Map the focused OS window to 'editor' | 'browser' | 'terminal' | 'other'
+    via case-insensitive substring match on "<app> <title>"."""
+    hay = f"{app_name} {title}".lower()
+    if any(m in hay for m in config.EDITOR_APP_MARKERS):
+        return "editor"
+    if any(m in hay for m in config.BROWSER_APP_MARKERS):
+        return "browser"
+    if any(m in hay for m in config.TERMINAL_APP_MARKERS):
+        return "terminal"
+    return "other"
 
 
 def _fetch_recent_logs(conn: sqlite3.Connection, limit: int) -> List[str]:
@@ -101,9 +149,13 @@ def assemble_context(db_path: Path = config.DB_PATH,
         return OmniContext(None, None, None, [])
     try:
         fc = _fetch_active_file(conn)
+        current = _fetch_current_window(conn)  # Phase 5.3: the REAL focus now
         logs = _fetch_recent_logs(conn, history)
     finally:
         conn.close()
+
+    cur_app, cur_title = current if current else (None, None)
+    focus_kind = _classify_focus(cur_app or "", cur_title or "") if current else "other"
 
     # Don't expose Nexus AI's own source as "the screen" (anti-recursion).
     if fc is not None and is_self_referential(fc):
@@ -112,44 +164,93 @@ def assemble_context(db_path: Path = config.DB_PATH,
             active_window_title=fc.window_title or None,
             file_content=None,
             recent_logs=logs,
+            current_os_app=cur_app,
+            current_os_title=cur_title,
+            focus_kind=focus_kind,
         )
     if fc is None:
-        return OmniContext(None, None, None, logs)
+        return OmniContext(
+            None, None, None, logs,
+            current_os_app=cur_app,
+            current_os_title=cur_title,
+            focus_kind=focus_kind,
+        )
     return OmniContext(
         active_file=fc.file_name,
         active_window_title=fc.window_title or None,
         file_content=fc.file_content,
         recent_logs=logs,
+        current_os_app=cur_app,
+        current_os_title=cur_title,
+        focus_kind=focus_kind,
     )
 
 
 # ---------------------------------------------------------------------------
 # Master prompt
 # ---------------------------------------------------------------------------
-def build_master_prompt(question: str, ctx: OmniContext) -> str:
-    """The Phase 4.5 master prompt fusing persona + omniscient context + query."""
-    active_file = ctx.active_file or ctx.active_window_title or "an unknown window"
+def _format_screen_context(ctx: OmniContext) -> str:
+    """Phase 5.3 — the dual-context [LIVE SCREEN CONTEXT] block.
 
+    Cures the Stale Context Bug by stating two SEPARATE facts to the LLM:
+      * the window focused RIGHT NOW (from `activity_log` — ground truth), and
+      * the last code file the user touched (background unless they're in the
+        editor). The model is told to describe the focused window for
+        "what's on my screen", and to lean on the code only for coding
+        questions or when the editor itself is focused.
+    """
+    focused_title = ctx.current_os_title or ctx.active_window_title or "an unknown window"
+    focused_app = ctx.current_os_app or "Unknown"
+
+    file_name = ctx.active_file or "none"
     if ctx.file_content and ctx.file_content.strip():
-        code = ctx.file_content[: config.MAX_CONTEXT_CHARS]
-        screen = (
-            f"User is currently looking at {active_file} containing this code:\n"
-            f"{code}"
+        file_block = ctx.file_content[: config.MAX_CONTEXT_CHARS]
+    else:
+        file_block = "(no code file captured)"
+
+    # A one-line situational summary so the model can't conflate the two.
+    if ctx.user_on_editor:
+        situation = (
+            "The user is FOCUSED ON THEIR CODE EDITOR right now, so the code "
+            "file below IS what is on their screen."
+        )
+    elif ctx.focus_kind in ("browser", "terminal"):
+        situation = (
+            f"The user is FOCUSED ON A {ctx.focus_kind.upper()} right now "
+            f"(\"{focused_title}\"), NOT on their code. The code file below is "
+            "only open in the BACKGROUND — do not claim it is on screen."
         )
     else:
-        screen = f"User is currently looking at {active_file}."
+        situation = (
+            f"The user is focused on \"{focused_title}\". The code file below "
+            "is background context only."
+        )
 
+    return (
+        "[LIVE SCREEN CONTEXT]\n"
+        f"Currently Focused Window: {focused_title} (App: {focused_app})\n"
+        f"Situation: {situation}\n"
+        f"Last Active Code File (Background/Editor): {file_name}\n"
+        f"File Content:\n{file_block}"
+    )
+
+
+def build_master_prompt(question: str, ctx: OmniContext) -> str:
+    """The Phase 4.5 master prompt fusing persona + omniscient context + query,
+    rebuilt in Phase 5.3 around dual (focused-window vs background-file) context."""
     history = "; ".join(ctx.recent_logs) if ctx.recent_logs else "no recent activity recorded"
 
     return (
         f"{PERSONA_LINE}\n"
-        f"[LIVE SCREEN]: {screen}\n"
+        f"{_format_screen_context(ctx)}\n"
         f"[RECENT HISTORY]: User recently visited: {history}.\n"
         f"[USER SPOKE]: {question}\n"
         "Answer my spoken question now as Nexus Ten, in natural conversational "
-        "English. Use the LIVE SCREEN and RECENT HISTORY above as your source of "
-        "truth — for example, if I ask what I worked on, list the files from "
-        "RECENT HISTORY."
+        "English. If the user asks what is on their screen, tell them the "
+        "Currently Focused Window — NOT the background code file. Use the File "
+        "Content only for a coding question, or when the Focused Window IS their "
+        "code editor. If they ask what they worked on, list files from RECENT "
+        "HISTORY."
     )
 
 
@@ -173,17 +274,22 @@ NEXUS_SYSTEM_PROMPT = (
     "headings, or code symbols. Keep it natural and concise.\n"
     "\n"
     "WHAT YOU CAN SEE (read carefully):\n"
-    "- The [ACTIVE SCREEN CONTEXT] block is the EXACT name and full contents of "
-    "the file the user CURRENTLY has open. It is ground truth — trust it.\n"
-    "- The 'currently open file', 'this file', 'the file I'm on' ALWAYS means "
-    "the file named in [ACTIVE SCREEN CONTEXT] or releted file name availbel in user question. Use ONLY that block to answer "
-    "about it — never guess a different file name.\n"
-    "- [GLOBAL CODEBASE CONTEXT] / [OTHER PROJECT FILES] are OTHER files in the "
-    "project, NOT the open one. Use them only when the question is about the "
-    "wider codebase, never to describe the current file.\n"
+    "- The [LIVE SCREEN CONTEXT] block has TWO separate facts. 'Currently "
+    "Focused Window' is the app the user is looking at RIGHT NOW (ground truth "
+    "for 'what is on my screen'). 'Last Active Code File' is the file they last "
+    "edited — it may only be open in the BACKGROUND.\n"
+    "- If the user asks what is on their screen / what they're looking at, "
+    "answer with the Currently Focused Window. If that window is a browser or "
+    "terminal, say so — do NOT claim a Python file is on screen just because it "
+    "is the last code file.\n"
+    "- Use 'File Content' ONLY for a coding question, or when the Currently "
+    "Focused Window IS the code editor (see the 'Situation' line). Never "
+    "describe the background code file as if it were on screen.\n"
+    "- 'this file' / 'the file I'm on' means the file named in 'Last Active Code "
+    "File'. Use ONLY that block for it — never guess a different file name.\n"
     "- If asked for the first N lines (or the start) of the open file, quote the "
-    "first N lines of the [ACTIVE SCREEN CONTEXT] code EXACTLY as written. Do "
-    "not invent or pull code from anywhere else.\n"
+    "first N lines of the File Content EXACTLY as written. Do not invent or pull "
+    "code from anywhere else.\n"
     "\n"
     "CASUAL vs CODE:\n"
     "- FIRST decide: is this a code/screen/work question, or casual chat?\n"
@@ -199,22 +305,18 @@ def build_session_context_block(question: str, ctx: OmniContext,
                                 session_memory: str) -> str:
     """The USER-role payload: live screen + history + thread + the question.
     Pairs with NEXUS_SYSTEM_PROMPT in the system role."""
-    active_file = ctx.active_file or ctx.active_window_title or "an unknown window"
-    if ctx.file_content and ctx.file_content.strip():
-        screen = (f"User is currently viewing {active_file} containing:\n"
-                  f"{ctx.file_content[: config.MAX_CONTEXT_CHARS]}")
-    else:
-        screen = f"User is currently viewing {active_file}."
     history = "; ".join(ctx.recent_logs) if ctx.recent_logs else "nothing notable"
     thread = session_memory.strip() or "(start of conversation)"
 
     return (
-        f"[LIVE SCREEN]: {screen}\n"
+        f"{_format_screen_context(ctx)}\n"
         f"[RECENT HISTORY]: {history}.\n"
         f"[CONVERSATION THREAD]:\n{thread}\n"
         f"[USER SPOKE]: {question}\n"
-        "Remember: if this is casual chat, ignore the screen context and just "
-        "talk like a human; only use it if the question is about the code/screen."
+        "Remember: 'what is on my screen' = the Currently Focused Window, not "
+        "the background code file. Use File Content only for coding questions or "
+        "when the editor itself is focused. If this is casual chat, ignore the "
+        "screen context entirely and just talk like a human."
     )
 
 

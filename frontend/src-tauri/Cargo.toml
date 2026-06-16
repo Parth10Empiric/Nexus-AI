@@ -18,6 +18,15 @@ serde_json = "1"
 # is no system dependency to install.
 rusqlite = { version = "0.31", features = ["bundled"] }
 
+# ── Phase 6.1 — Native "Client Eyes" (replaces the Python tracker daemon) ───
+# Cross-platform active-window title + app-name capture (X11/Wayland/macOS/Win).
+active-win-pos-rs = "0.8"
+# OS-level recursive filesystem watcher (inotify on Linux). Pure-Rust, so there
+# is no extra system package to apt-install on the distributed .deb target.
+notify = "6.1"
+# RFC-3339 / ISO-8601 timestamps for the unified os-context event payload.
+chrono = { version = "0.4", features = ["clock"] }
+
 [features]
 # This feature is used for production builds (`tauri build`).
 custom-protocol = ["tauri/custom-protocol"]

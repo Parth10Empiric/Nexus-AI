@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { streamGenerate } from "../lib/ollama.js";
-import { useAgentSocket } from "../hooks/useAgentSocket.js";
+import { useNexusSocket } from "../context/NexusSocket.jsx";
 
 /**
  * ChatPanel — the conversation UI with the local AI.
@@ -44,12 +44,27 @@ export default function ChatPanel({ context }) {
 
   const scrollRef = useRef(null);
   const abortRef = useRef(null);
+  // True right after WE typed+sent, so we ignore the server's echo of our own
+  // {type:"user"} (we already rendered it). Voice questions have no such flag,
+  // so they DO get rendered from the echo.
+  const typedEchoPendingRef = useRef(false);
 
-  // Backend WebSocket: when connected, typed questions run through the SAME
-  // Python pipeline as voice (screen + files + retrieval). Falls back to direct
-  // Ollama (browser/dev) when the backend isn't running.
+  // Backend WebSocket: typed AND spoken questions run through the SAME server
+  // pipeline. We render voice turns here too (user line + streamed answer), so
+  // the chat shows the conversation even when you only used the mic.
   const handleWsEvent = useCallback((msg) => {
-    if (msg.type === "token") {
+    if (msg.type === "user") {
+      // Our own typed echo → already shown; skip. Voice → render it.
+      if (typedEchoPendingRef.current) {
+        typedEchoPendingRef.current = false;
+        return;
+      }
+      setMessages((prev) => [
+        ...prev,
+        { role: "user", content: msg.text || "" },
+        { role: "assistant", content: "" },
+      ]);
+    } else if (msg.type === "token") {
       setMessages((prev) => {
         const next = prev.slice();
         const last = next[next.length - 1];
@@ -59,10 +74,19 @@ export default function ChatPanel({ context }) {
         return next;
       });
     } else if (msg.type === "answer") {
+      // Authoritative full text (covers any dropped tokens).
+      setMessages((prev) => {
+        const next = prev.slice();
+        const last = next[next.length - 1];
+        if (last && last.role === "assistant") {
+          next[next.length - 1] = { role: "assistant", content: msg.text || last.content };
+        }
+        return next;
+      });
       setBusy(false);
     }
   }, []);
-  const { connected: backendUp, ask } = useAgentSocket(handleWsEvent);
+  const { connected: backendUp, ask } = useNexusSocket(handleWsEvent);
 
   // Keep the view pinned to the newest message as content streams in.
   useEffect(() => {
@@ -88,9 +112,10 @@ export default function ChatPanel({ context }) {
       { role: "assistant", content: "" },
     ]);
 
-    // Preferred path: route through the Python backend (screen + files + RAG),
-    // exactly like the voice assistant. Tokens arrive via handleWsEvent.
+    // Preferred path: route through the backend (screen + files + RAG), exactly
+    // like the voice assistant. Tokens arrive via handleWsEvent.
     if (backendUp) {
+      typedEchoPendingRef.current = true; // ignore the server's echo of this
       ask(question);
       return;
     }

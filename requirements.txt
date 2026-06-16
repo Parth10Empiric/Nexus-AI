@@ -1,6 +1,17 @@
 # Phase 1.1 — Background Window Tracker Daemon
 psutil>=5.9        # resolve PID -> process (application) name, cross-platform
 
+# Phase 7.1 — Central "Brain" Server (Client-Server SaaS gateway)
+fastapi>=0.110     # WebSocket gateway + REST health endpoint
+uvicorn[standard]>=0.29  # ASGI server (run: python server.py)
+pydantic>=2.6      # strict validation of the auth handshake payload
+# websockets is pulled in by uvicorn[standard]; ngrok tunnels the host port.
+
+# Phase 7.2 — Dual-Database Storage Layer (Postgres + per-tenant ChromaDB)
+sqlalchemy>=2.0    # ORM + pooled engine (pool_size=20, max_overflow=0)
+psycopg2-binary>=2.9  # PostgreSQL driver
+# chromadb + langchain-text-splitters already declared above (Phase 5.1).
+
 # Phase 3.2 — File-Change Event Hook
 watchdog>=4.0      # OS-level filesystem save events (inotify on Linux)
 

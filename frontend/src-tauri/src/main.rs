@@ -133,6 +133,183 @@ fn read_text_file(path: &Path) -> Option<(String, String)> {
     Some((name, content))
 }
 
+/// Linux mic fix: WebKitGTK ships with `getUserMedia` disabled and auto-denies
+/// every media permission request, so the React mic capture (Phase 6.2) fails
+/// with "permission denied". For each window we reach into the underlying
+/// WebKitGTK webview to (1) turn on the media-stream setting and (2) grant
+/// permission requests. No-op on macOS/Windows, which handle this natively.
+#[cfg(target_os = "linux")]
+fn enable_webview_media(window: &tauri::WebviewWindow) {
+    use webkit2gtk::{PermissionRequestExt, SettingsExt, WebViewExt};
+
+    let _ = window.with_webview(|platform| {
+        let webview = platform.inner(); // webkit2gtk::WebView
+        if let Some(settings) = WebViewExt::settings(&webview) {
+            settings.set_enable_media_stream(true);
+            settings.set_enable_mediasource(true);
+            settings.set_enable_webaudio(true);
+        }
+        // Trusted local app → grant mic/camera/etc. requests instead of denying.
+        webview.connect_permission_request(|_wv, req| {
+            req.allow();
+            true
+        });
+    });
+}
+
+/// No-op stub so call sites stay clean on non-Linux platforms.
+#[cfg(not(target_os = "linux"))]
+fn enable_webview_media(_window: &tauri::WebviewWindow) {}
+
+/// Phase 7.3 initial index: file extensions worth embedding, directories to
+/// skip, and a hard cap so a huge workspace can't flood the server.
+const INDEX_EXTENSIONS: &[&str] = &[
+    "py", "js", "jsx", "ts", "tsx", "rs", "html", "css", "md", "json", "txt", "toml", "yaml",
+    "yml", "sh", "go", "java", "c", "cpp", "h", "hpp", "rb", "php", "vue", "svelte",
+];
+const INDEX_IGNORE_DIRS: &[&str] = &[
+    "node_modules", "target", "venv", "__pycache__", "dist", "build", "out", ".cache",
+];
+const INDEX_MAX_FILES: usize = 300;
+
+/// One-time recursive scan of `root`: read every code/text file and emit it as a
+/// `nexus://os-context` event (file fields only) so the client forwards it to
+/// the server for embedding. Bounded by [`INDEX_MAX_FILES`]; skips hidden dirs,
+/// junk dirs, and non-text/oversized files (via [`read_text_file`]). Runs on its
+/// own thread so it never blocks the watcher setup.
+fn scan_and_emit(app: &AppHandle, root: &std::path::Path) {
+    let mut emitted = 0usize;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
+            if path.is_dir() {
+                // Skip hidden (.git, .venv, …) and known junk directories.
+                if name.starts_with('.') || INDEX_IGNORE_DIRS.contains(&name.as_str()) {
+                    continue;
+                }
+                stack.push(path);
+                continue;
+            }
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if !INDEX_EXTENSIONS.contains(&ext.as_str()) {
+                continue;
+            }
+            if let Some((file_name, content)) = read_text_file(&path) {
+                let payload = OsContextPayload {
+                    timestamp: Utc::now().to_rfc3339(),
+                    active_window_title: String::new(),
+                    active_app_name: String::new(),
+                    last_saved_file_name: Some(file_name),
+                    file_content: Some(content),
+                };
+                let _ = app.emit("nexus://os-context", payload);
+                emitted += 1;
+                if emitted >= INDEX_MAX_FILES {
+                    println!("[nexus] workspace scan hit the {emitted}-file cap (stopped early)");
+                    return;
+                }
+            }
+        }
+    }
+    println!("[nexus] workspace scan complete: {emitted} files emitted for indexing");
+}
+
+/// Phase 7.3 active-file resolver state: the watched workspace root + a cache of
+/// resolved filename→path so we don't re-walk the tree every second.
+#[derive(Default)]
+struct WorkspaceState {
+    root: Option<PathBuf>,
+    cache: std::collections::HashMap<String, PathBuf>,
+}
+type SharedWorkspace = Arc<Mutex<WorkspaceState>>;
+
+/// Pull a likely filename ("models.py") out of a window title like
+/// "● models.py — Nexus AI — Visual Studio Code". Mirrors the Python
+/// file_resolver: a token must have a dot + a 1-8 char alphabetic-led extension,
+/// so "Visual Studio Code" / "Nexus AI" are never mistaken for files.
+fn extract_filename(title: &str) -> Option<String> {
+    for raw in title.split(|c: char| c.is_whitespace() || c == '—' || c == '|') {
+        let tok = raw.trim_matches(|c: char| matches!(c, '●' | '•' | '*' | '◆' | '·'));
+        if let Some(dot) = tok.rfind('.') {
+            if dot == 0 || dot + 1 >= tok.len() {
+                continue;
+            }
+            let ext = &tok[dot + 1..];
+            let alpha_led = ext.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false);
+            if alpha_led && ext.len() <= 8 && ext.chars().all(|c| c.is_ascii_alphanumeric()) {
+                return Some(tok.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Find a file by basename within the workspace (pruned, budgeted walk).
+fn find_file_in_workspace(root: &std::path::Path, name: &str) -> Option<PathBuf> {
+    let mut stack = vec![root.to_path_buf()];
+    let mut budget = 8000; // bound the walk so a giant tree can't stall the tick
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            budget -= 1;
+            if budget <= 0 {
+                return None;
+            }
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(n) = path.file_name().and_then(|x| x.to_str()) {
+                    if n.starts_with('.') || INDEX_IGNORE_DIRS.contains(&n) {
+                        continue;
+                    }
+                }
+                stack.push(path);
+            } else if path.file_name().and_then(|x| x.to_str()) == Some(name) {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+/// Resolve the currently focused file from the window title and read its CURRENT
+/// content from disk. Returns `(file_name, content)` or None when the focused
+/// window isn't a readable file (e.g. a browser). This is what keeps the agent's
+/// "currently open file" accurate when the user switches files WITHOUT saving.
+fn resolve_active_file(ws: &SharedWorkspace, title: &str) -> Option<(String, String)> {
+    let name = extract_filename(title)?;
+    let (root, cached) = {
+        let s = ws.lock().ok()?;
+        (s.root.clone()?, s.cache.get(&name).cloned())
+    };
+    let path = match cached {
+        Some(p) if p.is_file() => p,
+        _ => {
+            let found = find_file_in_workspace(&root, &name)?;
+            if let Ok(mut s) = ws.lock() {
+                s.cache.insert(name.clone(), found.clone());
+            }
+            found
+        }
+    };
+    read_text_file(&path)
+}
+
 /// The infinite-loop guardrail (mirror of context_mixer.is_self_referential).
 /// True if the active file belongs to Nexus AI's OWN codebase.
 fn is_self_referential(absolute_path: &str, window_title: &str) -> bool {
@@ -252,11 +429,18 @@ fn start_file_watcher(
     app: AppHandle,
     ctx: State<'_, SharedContext>,
     store: State<'_, WatcherStore>,
+    workspace: State<'_, SharedWorkspace>,
 ) -> Result<(), String> {
     let resolved = expand_tilde(&workspace_path);
     let watch_path = PathBuf::from(&resolved);
     if !watch_path.exists() {
         return Err(format!("workspace path does not exist: {resolved}"));
+    }
+
+    // Tell the active-file resolver (window thread) which root to search.
+    if let Ok(mut ws) = workspace.lock() {
+        ws.root = Some(watch_path.clone());
+        ws.cache.clear();
     }
 
     // Clones captured by the notify callback (runs on notify's own thread).
@@ -296,6 +480,16 @@ fn start_file_watcher(
 
     // Keep it alive: dropping a RecommendedWatcher silently stops all events.
     *store.0.lock().map_err(|e| e.to_string())? = Some(watcher);
+
+    // One-time initial index of files already in the workspace, on its own
+    // thread so we return immediately (the scan can take a moment).
+    let scan_app = app.clone();
+    let scan_root = watch_path.clone();
+    std::thread::Builder::new()
+        .name("nexus-workspace-scan".into())
+        .spawn(move || scan_and_emit(&scan_app, &scan_root))
+        .ok();
+
     Ok(())
 }
 
@@ -335,6 +529,11 @@ fn spawn_agent_orb(app: AppHandle) -> Result<(), String> {
     .build()
     .map_err(|e| e.to_string())?;
 
+    // The orb hosts the same React bundle, so it also needs mic access on Linux.
+    if let Some(orb) = app.get_webview_window(ORB_LABEL) {
+        enable_webview_media(&orb);
+    }
+
     let _ = app.emit("orb://opened", ());
     Ok(())
 }
@@ -354,15 +553,23 @@ fn close_agent_orb(app: AppHandle) -> Result<(), String> {
 
 fn main() {
     tauri::Builder::default()
-        // Phase 6.1 managed state: shared OS context + the live watcher handle.
+        // Phase 6.1/7.3 managed state: shared OS context, watcher handle, and
+        // the active-file workspace resolver state.
         .manage::<SharedContext>(Arc::new(Mutex::new(ContextState::default())))
         .manage(WatcherStore(Mutex::new(None)))
+        .manage::<SharedWorkspace>(Arc::new(Mutex::new(WorkspaceState::default())))
         .setup(|app| {
+            // Linux mic fix: enable media-stream + auto-grant on the main window.
+            if let Some(main) = app.get_webview_window("main") {
+                enable_webview_media(&main);
+            }
+
             // Spawn the non-blocking active-window poller. It owns clones of the
             // AppHandle and the shared context, ticks every 1000ms forever, and
             // never touches the UI/render thread.
             let handle = app.handle().clone();
             let ctx: SharedContext = app.state::<SharedContext>().inner().clone();
+            let ws: SharedWorkspace = app.state::<SharedWorkspace>().inner().clone();
 
             std::thread::Builder::new()
                 .name("nexus-window-eyes".into())
@@ -375,10 +582,26 @@ fn main() {
                         Err(_) => (String::new(), String::new()),
                     };
 
+                    // Resolve + read the CURRENTLY focused file fresh from disk,
+                    // so switching files (even without saving) updates content.
+                    let resolved = resolve_active_file(&ws, &title);
+
                     {
                         let mut s = ctx.lock().expect("os-context state poisoned");
                         s.active_window_title = title;
                         s.active_app_name = app_name;
+                        match resolved {
+                            Some((fname, content)) => {
+                                s.last_saved_file_name = Some(fname);
+                                s.file_content = Some(content);
+                            }
+                            // Not on a readable file (browser, terminal, …) →
+                            // clear so a stale file never poses as "open".
+                            None => {
+                                s.last_saved_file_name = None;
+                                s.file_content = None;
+                            }
+                        }
                     }
 
                     emit_os_context(&handle, &ctx);

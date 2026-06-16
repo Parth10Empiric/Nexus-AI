@@ -296,3 +296,159 @@ Before declaring the entire project production-ready, verify this full end-to-en
 3. Use the chat function to ask the AI: *"What did I do 2 hours ago?"* The app should query ChromaDB and summarize your history accurately.
 4. Ping a team member using the system UI to get their input on your current code.
 5. At the end of the day, review your automated Markdown work report summary, click **Approve**, and verify it appears on your central manager dashboard securely.
+
+---
+
+# 🚀 Nexus AI: Phase 6 to 9 Development Roadmap
+
+## Cloud Migration & Collaborative Team Workspace
+
+---
+
+## 🔒 Baseline Security Strategy: The "Invite Key" Authentication
+
+To handle data isolation without the overhead of heavy registration databases during testing, every WebSocket payload sent from the Tauri client to the server will now append an `auth` header package:
+
+```json
+{
+  "auth": {
+    "invite_key": "nexus_key_44bB",
+    "username": "friend_a"
+  }
+}
+
+```
+
+The FastAPI backend validates this against an in-memory or configuration file directory before spinning up separate dynamic structures.
+
+---
+
+## 🏗️ Detailed Phase Definitions
+
+### Phase 6: Core Client-Server Splitting & Rust "Spy" Architecture (Step 1 & 2)
+
+**Developer Objective:** Remove hardware dependencies from the local Python engine and port all environmental "sensor capture" mechanisms into the client-side Tauri shell.
+
+* **Phase 6.1: Rust Native File & Window Watcher (The Client "Eyes")**
+* Integrate the `notify` or `tauri-plugin-fs-watch` crate into `src-tauri`. Configure it to watch the user's active workspaces. When a file write/save triggers, the Rust kernel reads the text payload.
+* Integrate a cross-platform active window tracking hook (using crates like `active-win-pos-rs` or native X11/Wayland bindings).
+* Set up a background loop executing every $1000\text{ms}$ that emits a non-blocking Tauri event payload (`nexus://os-context`) to the React UI layer.
+
+
+* **Phase 6.2: Web Audio API Integration (The Client "Ears")**
+* Deprecate Python `sounddevice`. Implement standard browser audio recording using `navigator.mediaDevices.getUserMedia()` inside the React app.
+* Configure a `ScriptProcessorNode` or `AudioWorklet` to capture audio input downsampled to $16\text{kHz}$ mono PCM stream blocks, ready for real-time WebSocket transport.
+
+
+
+---
+
+### Phase 7: Multi-Tenant WebSocket Pipeline & Dynamic Memory Isolation (Step 3 & 4)
+
+**Developer Objective:** Build the secure central communication nexus on your Host PC capable of dividing database spaces dynamically per incoming connection key.
+
+* **Phase 7.1: FastAPI Stateful Connection Manager**
+* Develop a Python FastAPI WebSocket routing application exposed via `ngrok`.
+* Maintain an active connections registry object mapped inside the memory cache:
+```python
+ACTIVE_CONNECTIONS = {
+    "friend_a": {"websocket": ws_object, "status": "active"},
+    "friend_b": {"websocket": ws_object, "status": "active"}
+}
+
+```
+
+
+
+
+* **Phase 7.2: Dynamic ChromaDB Multi-Tenancy Engine**
+* Refactor the vector database initialization logic. When a user connects and validates their invite key, dynamically spawn separate collections bounded by their username:
+```python
+user_codebase = chroma_client.get_or_create_collection(name=f"{username}_codebase_vault")
+user_timeline = chroma_client.get_or_create_collection(name=f"{username}_activity_vault")
+
+```
+
+
+* Route file synchronization payloads coming from Friend A exclusively to `friend_a_codebase_vault`.
+
+You should add the PostgreSQL migration directly into **Phase 7**.
+
+Because Phase 6 is focused entirely on the **Client/Frontend** (converting the tracker into Rust and Tauri), your database doesn't change yet. **Phase 7** is where we rebuild your **Server/Backend**, making it the absolute perfect spot to rip out SQLite3 and hook up your new PostgreSQL engine.
+
+Here is exactly how your updated roadmap looks with the Postgres migration injected as **Phase 7.3**, using your database password (`Postgres@1011`).
+
+---
+
+* **Phase 7.3: PostgreSQL Enterprise Database Migration Core 🆕**
+* Deprecate the `sqlite3` tracking file module.
+* Establish a centralized engine wrapper utilizing your custom pgAdmin credentials:
+```python
+# database.py
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+DATABASE_URL = "postgresql://nexus_admin:Postgres@1011@localhost:5432/nexus_cloud" # -> (it is example)
+#database_name = postgres
+#owner = postgres
+# password = Postgres@1011 - make sure not nay error by @ character in pasword
+
+engine = create_engine(DATABASE_URL, pool_size=20, max_overflow=0)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+```
+
+---
+
+### Phase 8: Inter-Agent Team Communication Framework (The Collaborative Core)
+
+**Developer Objective:** Build the routing layer that allows User A's Agent to pass queries natively onto User B's UI desktop space over the WebSocket broker.
+
+* **Phase 8.1: NLP Intent Parsing for Team Interception**
+* Update the System Prompt for your main LLM Core (`qwen2.5-coder`). Instruct the AI to watch for routing keywords like *"Ask [username] [question]"*.
+* If a routing intent is detected, the LLM must abort standard TTS generation and instead output a structured routing contract:
+```json
+{
+  "control_action": "AGENT_INTERCEPT_ROUTE",
+  "target_user": "friend_a",
+  "origin_user": "empiric",
+  "query_text": "Why is the database pool connection failing in your latest sync?"
+}
+
+```
+
+
+
+
+* **Phase 8.2: Target UI Prompting & Core Action States**
+* When the server receives an `AGENT_INTERCEPT_ROUTE` schema, it targets the specific connection matching `target_user` and pushes a live structural payload.
+* The floating Tauri UI agent on Friend A's computer transitions into a **High-Priority Attention pulsing state** and renders an overlaid interactive prompt window showing the origin user's question along with **three specific execution branches**:
+
+
+
+| Option Node | UI Component Triggered | Execution Flow Protocol |
+| --- | --- | --- |
+| **1. Let AI Answer** | Action Button Click | Client triggers a signal back to the Host server. The server reads `friend_a_codebase_vault`, runs a RAG lookup on Friend A's local data, answers it using Ollama, and broadcasts the response back to User A's audio pipeline. |
+| **2. Quick Chat** | Action Button Click | Automatically flashes a sidebar conversation window on both client apps, locking them into a direct P2P WebSocket text channel. |
+| **3. Write Answer** | Inline Text Field | Opens a native custom textarea block directly under the agent orb. Friend A types their thoughts. On hit enter, text is piped to the server, injected directly into User A's screen, and read aloud using `piper-tts`. |
+
+---
+
+### Phase 9: Separation of Communication Matrices (Direct vs. Team Channels)
+
+**Developer Objective:** Introduce a secure, localized chat matrix allowing clean switching between public channel broadcasting and sandboxed isolated peer interactions.
+
+* **Phase 9.1: Message Broker Topology**
+* Update your server-side payload routing definitions to explicitly distinguish between message targets using an explicit enum scheme (`peer_to_peer` | `broadcast_group`).
+
+
+* **Phase 9.2: Group Channel Sync**
+* Construct global chat rooms (`#general`, `#engineering`). Any data package routed with a room channel designation is immediately echoed to all authenticated clients currently registered in the active system loops, bypassing local RAG embedding matrices entirely to keep the line free for pure human messaging.
+
+
+
+---
+
+### single Relevant Question
+
+To begin building Phase 6, do you want the Tauri client to watch your entire home project path (`~/Projects/Nexus AI/`), or should we configure the Rust file watcher to only listen to a specific project directory passed dynamically by the user?

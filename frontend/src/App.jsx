@@ -1,11 +1,10 @@
-import { useRef } from "react";
 import { useActiveWindow } from "./hooks/useActiveWindow.js";
+import { useOsContextSync } from "./hooks/useOsContextSync.js";
+import { useNexusSocket } from "./context/NexusSocket.jsx";
 import StatusIndicator from "./components/StatusIndicator.jsx";
 import ActiveWindowCard from "./components/ActiveWindowCard.jsx";
 import ChatPanel from "./components/ChatPanel.jsx";
 import VoiceAgentPanel from "./components/VoiceAgentPanel.jsx";
-
-import { useAudioMic } from "./hooks/useAudioMic.js";
 
 /**
  * App — the Nexus AI dashboard shell.
@@ -20,16 +19,10 @@ import { useAudioMic } from "./hooks/useAudioMic.js";
 export default function App() {
   const { entry, status } = useActiveWindow();
 
-  // ── TEMP: Phase 6.2 mic-capture probe (remove after testing) ──────────────
-  const seen = useRef({ chunks: 0, samples: 0 });
-  const { startRecording, stopRecording, isRecording, error } = useAudioMic(
-    (chunk) => {
-      seen.current.chunks += 1;
-      seen.current.samples += chunk.length;
-      console.log("[mic chunk]", chunk.length, "samples — total", seen.current);
-    }
-  );
-  // ──────────────────────────────────────────────────────────────────────────
+  // Forward the native "eyes" (active window + saved files) to the brain server
+  // so the agent can see the currently open file and index the workspace.
+  const { send, connected } = useNexusSocket();
+  useOsContextSync({ send, connected });
 
   // The context object handed to the AI on every message.
   const aiContext = entry
@@ -51,16 +44,7 @@ export default function App() {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
-          {/* TEMP: Phase 6.2 mic-capture probe (remove after testing) */}
-          <button
-            onClick={isRecording ? stopRecording : startRecording}
-            className="text-xs px-3 py-1.5 rounded-md border border-nexus-border text-nexus-text hover:bg-nexus-elevated"
-          >
-            {error ?? (isRecording ? "Stop mic" : "Start mic")}
-          </button>
-          <StatusIndicator status={status} />
-        </div>
+        <StatusIndicator status={status} />
       </header>
 
       {/* ---- Main content: context column + chat ---- */}

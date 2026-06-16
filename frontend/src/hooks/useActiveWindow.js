@@ -75,41 +75,6 @@ export function useActiveWindow() {
 
   // Refs survive re-renders without retriggering effects.
   const mockIndex = useRef(0);
-  const invokeRef = useRef(null);
-
-  // Lazily load the Tauri invoke fn only when running natively.
-  useEffect(() => {
-    let cancelled = false;
-    if (isTauri()) {
-      import("@tauri-apps/api/core").then((mod) => {
-        if (!cancelled) invokeRef.current = mod.invoke;
-      });
-    }
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const readNative = useCallback(async () => {
-    try {
-      const invoke = invokeRef.current;
-      if (!invoke) return; // module still loading
-      const row = await invoke("get_active_window");
-      if (row) {
-        setEntry({
-          appName: row.app_name,
-          title: row.title,
-          timestamp: row.ts_utc,
-          event: row.event,
-        });
-      }
-      setStatus("online");
-      setLastUpdate(Date.now());
-    } catch {
-      // DB missing or tracker not running yet -> show OFFLINE, don't crash.
-      setStatus("offline");
-    }
-  }, []);
 
   const readMock = useCallback(() => {
     const next = MOCK_SEQUENCE[mockIndex.current % MOCK_SEQUENCE.length];
@@ -125,11 +90,49 @@ export function useActiveWindow() {
   }, []);
 
   useEffect(() => {
-    const tick = isTauri() ? readNative : readMock;
-    tick(); // fire immediately so the UI isn't empty on first paint
-    const id = setInterval(tick, POLL_MS);
-    return () => clearInterval(id);
-  }, [readNative, readMock]);
+    // BROWSER: no native shell → run the mock timeline so the UI isn't empty.
+    if (!isTauri()) {
+      readMock();
+      const id = setInterval(readMock, POLL_MS);
+      return () => clearInterval(id);
+    }
+
+    // NATIVE: subscribe to the Phase 6.1 Rust "eyes" event (nexus://os-context).
+    // This is live, needs NO Python tracker, and replaces the old SQLite poll
+    // (get_active_window) that showed stale/empty data — the source of the
+    // "random names" bug. Each 1000ms tick carries the real focused window.
+    let unlisten = null;
+    let cancelled = false;
+    import("@tauri-apps/api/event").then(({ listen }) => {
+      if (cancelled) return;
+      listen("nexus://os-context", (event) => {
+        const p = event.payload || {};
+        // Empty strings happen on unsupported sessions (e.g. some Wayland) —
+        // keep the previous entry rather than flashing blank, but stay online.
+        if (!p.active_window_title && !p.active_app_name) {
+          setStatus("online");
+          setLastUpdate(Date.now());
+          return;
+        }
+        setEntry({
+          appName: p.active_app_name || "",
+          title: p.active_window_title || "",
+          timestamp: p.timestamp || new Date().toISOString(),
+          event: "live",
+        });
+        setStatus("online");
+        setLastUpdate(Date.now());
+      }).then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      });
+    });
+
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, [readMock]);
 
   return { entry, status, lastUpdate };
 }

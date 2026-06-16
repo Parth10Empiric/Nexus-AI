@@ -27,6 +27,13 @@ notify = "6.1"
 # RFC-3339 / ISO-8601 timestamps for the unified os-context event payload.
 chrono = { version = "0.4", features = ["clock"] }
 
+# Linux only: the WebKitGTK webview disables getUserMedia and auto-denies mic
+# permission by default. We pin the SAME webkit2gtk version wry links (2.0.2) so
+# `with_webview().inner()` hands back a matching `WebView` type, then enable
+# media-stream + grant the permission request (Phase 7.3 voice-in fix).
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = "=2.0.2"
+
 [features]
 # This feature is used for production builds (`tauri build`).
 custom-protocol = ["tauri/custom-protocol"]

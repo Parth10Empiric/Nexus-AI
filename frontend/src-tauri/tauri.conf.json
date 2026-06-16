@@ -25,7 +25,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:11434 ipc: http://ipc.localhost"
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:11434 ws://127.0.0.1:8765 ws://localhost:8765 ws://127.0.0.1:8000 ws://localhost:8000 wss://*.ngrok-free.app https://*.ngrok-free.app wss://*.ngrok-free.dev https://*.ngrok-free.dev wss://*.ngrok.app https://*.ngrok.app wss://*.ngrok.io https://*.ngrok.io ipc: http://ipc.localhost"
     }
   },
   "bundle": {

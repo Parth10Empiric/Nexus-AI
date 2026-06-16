@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { invoke } from "@tauri-apps/api/core";
-import { useAgentSocket } from "../hooks/useAgentSocket.js";
+import { useNexusSocket } from "../context/NexusSocket.jsx";
 
 /**
  * AgentOrb — UI Phase 1 · the Floating Agent Widget.
@@ -36,7 +36,7 @@ const STATES = {
 const DRAG_THRESHOLD = 4; // px before a press becomes a window drag
 
 export default function AgentOrb() {
-  const { connected, agentState, detail, activate, deactivate, sleep } = useAgentSocket();
+  const { connected, agentState, detail, activate, deactivate, sleep } = useNexusSocket();
   const [menu, setMenu] = useState(null); // {x, y} | null
   const pressRef = useRef(null); // {x, y, dragging} | null
   const appWindow = useRef(getCurrentWebviewWindow());
@@ -94,6 +94,15 @@ export default function AgentOrb() {
     setMenu(null);
     sleep();
   }, [sleep]);
+
+  // Wake the agent back up from standby → start listening again.
+  const handleWake = useCallback(() => {
+    setMenu(null);
+    activate();
+  }, [activate]);
+
+  // "Asleep" = standby or off → the menu offers Wake Up; otherwise Sleep.
+  const asleep = agentState === "sleeping" || agentState === "off";
 
   // "Close Agent" → ask Rust to destroy this window. The dashboard hears
   // `orb://closed` and flips its toggle back off.
@@ -182,12 +191,22 @@ export default function AgentOrb() {
           <div className="px-3 py-1.5 text-[10px] uppercase tracking-wide text-nexus-faint">
             Nexus · {meta.label}
           </div>
-          <button
-            onClick={handleSleep}
-            className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-nexus-text hover:bg-nexus-elevated transition-colors duration-150"
-          >
-            <span className="text-base leading-none">🌙</span> Sleep
-          </button>
+          {asleep ? (
+            <button
+              onClick={handleWake}
+              disabled={!connected}
+              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-nexus-text hover:bg-nexus-elevated transition-colors duration-150 disabled:opacity-40"
+            >
+              <span className="text-base leading-none">☀️</span> Wake Up
+            </button>
+          ) : (
+            <button
+              onClick={handleSleep}
+              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-nexus-text hover:bg-nexus-elevated transition-colors duration-150"
+            >
+              <span className="text-base leading-none">🌙</span> Sleep
+            </button>
+          )}
           <button
             onClick={handleClose}
             className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-nexus-offline hover:bg-nexus-offline/15 transition-colors duration-150"

@@ -246,41 +246,72 @@ async def _handle_ask(
     # Note: the voice path already emitted "thinking" before STT, so we don't
     # re-emit it here — keeps the state sequence exact (no double "thinking").
 
-    # Per-tenant retrieval → prompt grounded in the user's OPEN file + vault.
-    user_content = await brain_service.retrieve_user_context(username, text, active=active)
-    messages = brain_service.build_messages(list(history), user_content, voice=voice)
+    # ── Streaming-TTS pump (voice turns) ────────────────────────────────────
+    # A dedicated background task pulls finished sentence chunks off a queue,
+    # synthesizes each (synthesize_tts offloads Piper to a worker thread), and
+    # streams the PCM to the client IN ORDER. Because synthesis lives in this
+    # task, the event loop below NEVER blocks on Piper — generation, RAG, and
+    # speech all overlap.
+    tts_queue: asyncio.Queue | None = None
+    tts_task: asyncio.Task | None = None
 
-    # Voice answers are short (fast + small TTS); typed answers can be longer.
-    num_predict = (
-        brain_service.OLLAMA_NUM_PREDICT_VOICE if voice else brain_service.OLLAMA_NUM_PREDICT_TEXT
-    )
-
-    parts: list[str] = []
-    async for token in brain_service.stream_chat(messages, num_predict=num_predict):
-        if isinstance(token, tuple):  # ("__error__", msg)
-            log.warning("⚠️  [%s] LLM error: %s", username, token[1])
-            await manager.send_personal_message(
-                {"type": "answer", "text": f"⚠️ LLM error: {token[1]}"}, username
-            )
-            return
-        parts.append(token)
-        await manager.send_personal_message({"type": "token", "token": token}, username)
-
-    answer = "".join(parts)
-    log.info("🤖 [%s] REPLY: %s", username, answer)
-    await manager.send_personal_message({"type": "answer", "text": answer}, username)
+    async def _tts_pump(q: "asyncio.Queue") -> None:
+        """Synthesize + send queued sentence chunks in order until the sentinel."""
+        while True:
+            chunk = await q.get()
+            if chunk is None:  # sentinel → stream finished, drain done
+                return
+            audio = await brain_service.synthesize_tts(chunk)
+            if audio:
+                pcm_b64, sample_rate = audio
+                log.info("🔊 [%s] speaking chunk (%d B audio): %s", username, len(pcm_b64), chunk[:48])
+                await manager.send_personal_message(
+                    {"type": "tts_audio", "sample_rate": sample_rate, "pcm_b64": pcm_b64},
+                    username,
+                )
 
     if voice:
-        # Speak the answer: synthesize on the server, stream PCM to the client.
         await manager.send_personal_message({"type": "state", "state": "speaking"}, username)
-        tts = await brain_service.synthesize_tts(answer)
-        if tts:
-            pcm_b64, sample_rate = tts
-            log.info("🔊 [%s] speaking %d chars of audio", username, len(pcm_b64))
-            await manager.send_personal_message(
-                {"type": "tts_audio", "sample_rate": sample_rate, "pcm_b64": pcm_b64},
-                username,
-            )
+        tts_queue = asyncio.Queue()
+        tts_task = asyncio.create_task(_tts_pump(tts_queue))
+
+    # ── Drive the two-stage triage + streaming generator ────────────────────
+    # brain_service.generate_reply runs Stage 1 triage, branches (filler + concurrent
+    # RAG vs. direct casual answer), and yields typed events. We just route them:
+    #   filler/speak → TTS pump (voice)     token → live UI text     answer → final
+    answer = ""
+    try:
+        async for kind, payload in brain_service.generate_reply(
+            username, text, list(history), active=active, voice=voice
+        ):
+            if kind == "error":
+                log.warning("⚠️  [%s] LLM error: %s", username, payload)
+                await manager.send_personal_message(
+                    {"type": "answer", "text": f"⚠️ LLM error: {payload}"}, username
+                )
+                return
+            if kind == "filler":
+                # Human "hold on…" line: speak it now AND show it in the UI. It is
+                # NOT part of the stored answer — it's conversational cover only.
+                await manager.send_personal_message({"type": "token", "token": payload + " "}, username)
+                if tts_queue is not None:
+                    tts_queue.put_nowait(payload)
+            elif kind == "token":
+                await manager.send_personal_message({"type": "token", "token": payload}, username)
+            elif kind == "speak":
+                if tts_queue is not None:
+                    tts_queue.put_nowait(payload)
+            elif kind == "answer":
+                answer = payload
+    finally:
+        # Always release the pump (even on early return/exception) and wait for the
+        # last queued audio chunk to be sent before the turn ends.
+        if tts_task is not None:
+            tts_queue.put_nowait(None)  # sentinel
+            await tts_task
+
+    log.info("🤖 [%s] REPLY: %s", username, answer)
+    await manager.send_personal_message({"type": "answer", "text": answer}, username)
 
     # Remember the turn (bounded rolling window).
     history.append({"role": "user", "content": text})

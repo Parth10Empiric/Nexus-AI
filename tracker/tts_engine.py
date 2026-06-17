@@ -337,7 +337,7 @@ def main() -> int:
     req = urllib.request.Request(
         "http://localhost:11434/api/generate",
         data=json.dumps({
-            "model": "qwen2.5-coder:1.5b",
+            "model": config.OLLAMA_MODEL,
             "prompt": prompt,
             "stream": True,
         }).encode(),
